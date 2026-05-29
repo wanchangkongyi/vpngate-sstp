@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 VPN Gate SSTP 节点每日抓取脚本
-- 主机名: API 的 #HostName 字段 + .opengw.net 后缀
-- 端口:   从 ovpn base64 配置的 remote 行提取，默认 443
+- 主机名: #HostName + .opengw.net
+- 端口:   从 ovpn 配置提取 TCP 端口（SSTP 必须走 TCP）
 输出格式: sstp://vpn:vpn@hostname:port
 """
 
@@ -33,16 +33,50 @@ def fetch_raw(url: str, timeout: int = 30) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def extract_port(b64: str) -> int:
-    """从 base64 ovpn 配置提取端口，默认 443。"""
+def extract_tcp_port(b64: str) -> int:
+    """
+    从 ovpn 配置提取 TCP 端口。
+    ovpn 里可能有多个 remote 行对应不同协议/端口，
+    SSTP 必须走 TCP，所以找 proto tcp 对应的那个端口。
+    
+    SoftEther 生成的 ovpn 格式：
+      remote IP PORT1   <- TCP
+      remote IP PORT2   <- UDP（如果有）
+      proto tcp / proto udp 交替出现
+    或者只有一种协议。
+    """
     try:
         cfg = base64.b64decode(b64).decode("utf-8", errors="replace")
-        m = re.search(r'^remote\s+\S+\s+(\d+)', cfg, re.MULTILINE)
-        if m:
-            return int(m.group(1))
+        lines = cfg.splitlines()
+
+        # 收集所有 remote 行（按顺序）
+        remotes = []
+        for line in lines:
+            line = line.strip()
+            m = re.match(r'^remote\s+\S+\s+(\d+)', line)
+            if m:
+                remotes.append(int(m.group(1)))
+
+        if not remotes:
+            return 443
+
+        # 如果只有一种端口（或所有端口相同），直接返回
+        unique = list(dict.fromkeys(remotes))
+        if len(unique) == 1:
+            return unique[0]
+
+        # 有多个不同端口：排除 UDP 常见端口（1194），取非 UDP 端口
+        # UDP VPN 常用端口: 1194, 1195, 1196 等
+        UDP_PORTS = {1194, 1195, 1196, 1197, 1198}
+        tcp_candidates = [p for p in unique if p not in UDP_PORTS]
+        if tcp_candidates:
+            return tcp_candidates[0]
+
+        # 兜底返回第一个
+        return remotes[0]
+
     except Exception:
-        pass
-    return 443
+        return 443
 
 
 def parse_servers(raw: str) -> list:
@@ -53,18 +87,12 @@ def parse_servers(raw: str) -> list:
         short_name = row.get("#HostName", "").strip()
         if not short_name:
             continue
-
-        # 主机名：如果已经含有 . 说明是完整域名，否则补上后缀
-        if "." in short_name:
-            hostname = short_name
-        else:
-            hostname = short_name + DOMAIN
-
-        # 端口：从 ovpn 配置提取
-        b64  = row.get("OpenVPN_ConfigData_Base64", "").strip()
-        port = extract_port(b64) if b64 else 443
-
-        results.append(f"sstp://vpn:vpn@{hostname}:{port}")
+        hostname = short_name if "." in short_name else short_name + DOMAIN
+        b64     = row.get("OpenVPN_ConfigData_Base64", "").strip()
+        port    = extract_tcp_port(b64) if b64 else 443
+        country = row.get("CountryShort", "").strip()
+        suffix  = f"#{country}" if country else ""
+        results.append(f"sstp://vpn:vpn@{hostname}:{port}{suffix}")
     return results
 
 
