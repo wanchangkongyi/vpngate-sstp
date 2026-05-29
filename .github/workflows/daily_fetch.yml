@@ -1,0 +1,64 @@
+name: 每日更新 SSTP 节点到 Gist
+
+on:
+  schedule:
+    - cron: "0 1 * * *"   # 每天 UTC 01:00（北京时间 09:00）
+  workflow_dispatch:        # 允许手动触发
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 运行抓取脚本
+        run: python fetch_vpngate.py
+
+      - name: 预览前 5 条
+        run: head -8 ip.txt
+
+      - name: 推送到 Gist
+        env:
+          GIST_ID:    ${{ secrets.GIST_ID }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+        run: |
+          python - << 'PYEOF'
+          import json, os
+          from urllib.request import urlopen, Request
+
+          gist_id = os.environ["GIST_ID"]
+          token   = os.environ["GIST_TOKEN"]
+
+          with open("ip.txt", encoding="utf-8") as f:
+              content = f.read()
+
+          payload = json.dumps({
+              "files": {
+                  "ip.txt": {"content": content}
+              }
+          }).encode()
+
+          req = Request(
+              f"https://api.github.com/gists/{gist_id}",
+              data=payload,
+              method="PATCH",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
+          )
+          with urlopen(req) as resp:
+              result = json.load(resp)
+              print("✅ Gist 更新成功")
+              print("Raw URL:", result["files"]["ip.txt"]["raw_url"])
+          PYEOF
