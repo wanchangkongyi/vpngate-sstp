@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
 VPN Gate SSTP 节点每日抓取脚本
-
-思路：
-  - VPNGate API 返回每个节点的 OpenVPN base64 配置
-  - 配置里的 "remote hostname PORT" 就是 SoftEther 监听端口
-  - SSTP 和 SoftEther SSL-VPN 共用同一个 HTTPS 端口
-  - 所以从 ovpn 配置提取端口即为 SSTP 端口
-
+从 ovpn 配置的 remote 行同时提取完整主机名和端口
 输出格式: sstp://vpn:vpn@hostname:port
 """
 
@@ -37,38 +31,47 @@ def fetch_raw(url: str, timeout: int = 30) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def extract_port_from_ovpn(b64: str) -> int:
-    """从 base64 编码的 .ovpn 配置提取端口号，默认 443。"""
+def extract_from_ovpn(b64: str):
+    """
+    从 base64 编码的 .ovpn 配置提取完整主机名和端口。
+    ovpn 里 remote 行格式: remote public-vpn-120.opengw.net 443
+    返回 (hostname, port)，失败返回 (None, None)
+    """
     try:
         cfg = base64.b64decode(b64).decode("utf-8", errors="replace")
-        # 找 "remote hostname PORT" 这行
-        m = re.search(r'^remote\s+\S+\s+(\d+)', cfg, re.MULTILINE)
+        m = re.search(r'^remote\s+(\S+)\s+(\d+)', cfg, re.MULTILINE)
         if m:
-            return int(m.group(1))
+            return m.group(1), int(m.group(2))
     except Exception:
         pass
-    return 443
+    return None, None
 
 
 def parse_servers(raw: str) -> list:
     lines = [l for l in raw.splitlines() if not l.startswith("*")]
     reader = csv.DictReader(io.StringIO("\n".join(lines)))
     results = []
+    skipped = 0
     for row in reader:
-        hostname = row.get("#HostName", "").strip()
-        b64      = row.get("OpenVPN_ConfigData_Base64", "").strip()
-        if not hostname:
+        b64 = row.get("OpenVPN_ConfigData_Base64", "").strip()
+        if not b64:
+            skipped += 1
             continue
-        port = extract_port_from_ovpn(b64) if b64 else 443
+        hostname, port = extract_from_ovpn(b64)
+        if not hostname:
+            skipped += 1
+            continue
         results.append(f"sstp://vpn:vpn@{hostname}:{port}")
+    if skipped:
+        log.warning("跳过 %d 个无法解析的节点", skipped)
     return results
 
 
 def main():
     try:
         log.info("正在抓取 VPNGate 节点列表...")
-        raw     = fetch_raw(API_URL)
-        lines   = parse_servers(raw)
+        raw   = fetch_raw(API_URL)
+        lines = parse_servers(raw)
         log.info("共获取 %d 个节点", len(lines))
 
         if not lines:
