@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 VPN Gate SSTP 节点每日抓取脚本
+VPNGate 所有节点均支持 SSTP，端口固定 443，账密固定 vpn/vpn
 输出格式: sstp://vpn:vpn@hostname:443
 """
 
@@ -14,7 +15,6 @@ from urllib.error import URLError
 
 API_URL   = "https://www.vpngate.net/api/iphone/"
 OUTPUT    = "ip.txt"
-SSTP_PORT = 443
 HEADERS   = {"User-Agent": "Mozilla/5.0 (compatible; vpngate-fetcher/1.0)"}
 
 logging.basicConfig(level=logging.INFO,
@@ -29,26 +29,24 @@ def fetch_raw(url: str, timeout: int = 30) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def parse_sstp(raw: str) -> list:
+def parse_servers(raw: str) -> list:
     lines = [l for l in raw.splitlines() if not l.startswith("*")]
     reader = csv.DictReader(io.StringIO("\n".join(lines)))
     results = []
     for row in reader:
-        if row.get("SSTP", "").strip().lower() != "true":
-            continue
         hostname = row.get("#HostName", "").strip()
         if not hostname:
             continue
-        results.append(f"sstp://vpn:vpn@{hostname}:{SSTP_PORT}")
+        results.append(f"sstp://vpn:vpn@{hostname}:443")
     return results
 
 
 def main():
     try:
         log.info("正在抓取 VPNGate 节点列表...")
-        raw   = fetch_raw(API_URL)
-        lines = parse_sstp(raw)
-        log.info("找到 %d 个 SSTP 节点", len(lines))
+        raw     = fetch_raw(API_URL)
+        lines   = parse_servers(raw)
+        log.info("共获取 %d 个节点", len(lines))
 
         updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         content = (
