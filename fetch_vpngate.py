@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 VPN Gate SSTP 节点每日抓取脚本
-从 ovpn 配置的 remote 行同时提取完整主机名和端口
+- 主机名: API 的 #HostName 字段 + .opengw.net 后缀
+- 端口:   从 ovpn base64 配置的 remote 行提取，默认 443
 输出格式: sstp://vpn:vpn@hostname:port
 """
 
@@ -17,6 +18,7 @@ from urllib.error import URLError
 
 API_URL  = "https://www.vpngate.net/api/iphone/"
 OUTPUT   = "ip.txt"
+DOMAIN   = ".opengw.net"
 HEADERS  = {"User-Agent": "Mozilla/5.0 (compatible; vpngate-fetcher/1.0)"}
 
 logging.basicConfig(level=logging.INFO,
@@ -31,39 +33,38 @@ def fetch_raw(url: str, timeout: int = 30) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
-def extract_from_ovpn(b64: str):
-    """
-    从 base64 编码的 .ovpn 配置提取完整主机名和端口。
-    ovpn 里 remote 行格式: remote public-vpn-120.opengw.net 443
-    返回 (hostname, port)，失败返回 (None, None)
-    """
+def extract_port(b64: str) -> int:
+    """从 base64 ovpn 配置提取端口，默认 443。"""
     try:
         cfg = base64.b64decode(b64).decode("utf-8", errors="replace")
-        m = re.search(r'^remote\s+(\S+)\s+(\d+)', cfg, re.MULTILINE)
+        m = re.search(r'^remote\s+\S+\s+(\d+)', cfg, re.MULTILINE)
         if m:
-            return m.group(1), int(m.group(2))
+            return int(m.group(1))
     except Exception:
         pass
-    return None, None
+    return 443
 
 
 def parse_servers(raw: str) -> list:
     lines = [l for l in raw.splitlines() if not l.startswith("*")]
     reader = csv.DictReader(io.StringIO("\n".join(lines)))
     results = []
-    skipped = 0
     for row in reader:
-        b64 = row.get("OpenVPN_ConfigData_Base64", "").strip()
-        if not b64:
-            skipped += 1
+        short_name = row.get("#HostName", "").strip()
+        if not short_name:
             continue
-        hostname, port = extract_from_ovpn(b64)
-        if not hostname:
-            skipped += 1
-            continue
+
+        # 主机名：如果已经含有 . 说明是完整域名，否则补上后缀
+        if "." in short_name:
+            hostname = short_name
+        else:
+            hostname = short_name + DOMAIN
+
+        # 端口：从 ovpn 配置提取
+        b64  = row.get("OpenVPN_ConfigData_Base64", "").strip()
+        port = extract_port(b64) if b64 else 443
+
         results.append(f"sstp://vpn:vpn@{hostname}:{port}")
-    if skipped:
-        log.warning("跳过 %d 个无法解析的节点", skipped)
     return results
 
 
