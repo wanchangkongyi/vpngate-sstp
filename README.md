@@ -7,7 +7,7 @@
 通过 Cloudflare Worker 绑定自定义域名后访问：
 
 ```
-https://vpn.yourdomain.com/sub
+https://bpsub.194216.xyz/vpn
 ```
 
 ## 节点格式
@@ -32,48 +32,6 @@ sstp://vpn:vpn@vpn519731163.opengw.net:1598#KR
 ## 更新频率
 
 每天 **北京时间 09:00** 自动运行，也可在 Actions 页面手动触发。
-
-## 部署说明
-
-### 1. 创建 Gist
-
-前往 [gist.github.com](https://gist.github.com) 新建一个 Gist，文件名填 `ip.txt`，记录 Gist ID（URL 最后一段）。
-
-### 2. 创建 Token
-
-前往 [github.com/settings/tokens](https://github.com/settings/tokens)，新建 Classic Token，只勾选 `gist` 权限。
-
-### 3. 配置 Secrets
-
-在仓库 **Settings → Secrets → Actions** 添加：
-
-| Name | Value |
-|------|-------|
-| `GIST_ID` | 第一步的 Gist ID |
-| `GIST_TOKEN` | 第二步的 Token |
-
-### 4. 配置 Cloudflare Worker
-
-新建 Worker，代码如下：
-
-```js
-export default {
-  async fetch(request) {
-    const gistUrl = "https://gist.githubusercontent.com/你的用户名/GIST_ID/raw/ip.txt";
-    const resp = await fetch(gistUrl);
-    const text = await resp.text();
-    return new Response(text, {
-      headers: { "Content-Type": "text/plain; charset=utf-8" }
-    });
-  }
-}
-```
-
-在 Worker 的 **Triggers → Routes** 绑定路由：
-
-```
-vpn.yourdomain.com/sub
-```
 
 ## 数据来源
 
