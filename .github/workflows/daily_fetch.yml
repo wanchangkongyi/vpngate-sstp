@@ -1,15 +1,18 @@
 name: 每日更新 SSTP 节点到 Gist
-
 on:
   schedule:
     - cron: "0 1 * * *"   # 每天 UTC 01:00（北京时间 09:00）
   workflow_dispatch:        # 允许手动触发
 
+# 需要写权限才能推送保活提交、删除 workflow 记录
+permissions:
+  contents: write
+  actions: write
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -33,19 +36,15 @@ jobs:
           python - << 'PYEOF'
           import json, os
           from urllib.request import urlopen, Request
-
           gist_id = os.environ["GIST_ID"]
           token   = os.environ["GIST_TOKEN"]
-
           with open("ip.txt", encoding="utf-8") as f:
               content = f.read()
-
           payload = json.dumps({
               "files": {
                   "ip.txt": {"content": content}
               }
           }).encode()
-
           req = Request(
               f"https://api.github.com/gists/{gist_id}",
               data=payload,
@@ -62,3 +61,26 @@ jobs:
               print("✅ Gist 更新成功")
               print("Raw URL:", result["files"]["ip.txt"]["raw_url"])
           PYEOF
+
+      # ========== 功能1：仓库保活 ==========
+      # GitHub 会自动停用 60 天没有任何 commit 活动的仓库定时任务
+      # 这里每次运行都写一个时间戳文件并提交，保证仓库“活跃”
+      - name: 保活仓库（写入时间戳并提交）
+        run: |
+          mkdir -p .github/keepalive
+          date -u +"%Y-%m-%d %H:%M:%S UTC" > .github/keepalive/last_run.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive/last_run.txt
+          git diff --cached --quiet || git commit -m "chore: keepalive $(date -u +%Y-%m-%d)"
+          git push
+
+      # ========== 功能2：清理 workflow 运行记录 ==========
+      # 只保留最近 N 条记录，其余全部删除，避免历史记录堆积
+      - name: 清理旧的 workflow 运行记录
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          retain_days: 0          # 不按天数过滤，配合 keep_minimum_runs 使用
+          keep_minimum_runs: 1   # 只保留最近 1 次运行记录
